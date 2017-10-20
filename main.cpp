@@ -12,6 +12,14 @@ enum ECommand {
     OPT_USER_INFO
 };
 
+static std::string merge_strings(const std::vector<std::string>& v) {
+    std::string ans;
+    for (size_t i = 0; i < v.size() - 1; ++i)
+        ans += v[i] + ' ';
+    ans += v.back();
+    return ans;
+}
+
 class Command {
 public:
     using CallbackType = std::function<bool(const po::variables_map&)>;
@@ -29,6 +37,10 @@ public:
 
     std::vector<std::string> get_text() const {
         return text_;
+    }
+
+    std::string get_merged_text() const {
+        return merge_strings(text_);
     }
 
     ECommand get_id() const {
@@ -109,6 +121,29 @@ public:
         }
 
         return nullptr;
+    }
+
+    void print_help() const {
+        std::cout << "commands:" << std::endl;
+
+        std::vector<std::string> cmd_names;
+        std::vector<std::string> cmd_helps;
+
+        size_t max_cmd_len = 0;
+
+        for (const auto& cmd : commands_) {
+            cmd_names.push_back(cmd->get_merged_text());
+            cmd_helps.push_back(cmd->get_help());
+            max_cmd_len = std::max(max_cmd_len, cmd_names.back().size());
+        }
+
+        for (size_t i = 0; i < cmd_names.size(); ++i) {
+            std::cout << cmd_names[i];
+            size_t rest = max_cmd_len - cmd_names[i].size();
+            for (size_t j = 0; j < rest; ++j)
+                std::cout << ' ';
+            std::cout << "    " << cmd_helps[i] << std::endl;
+        }
     }
 
 private:
@@ -192,9 +227,15 @@ po::options_description register_options() {
     return desk;
 }
 
-void print_help_on_error(po::options_description& option_desk) {
+void print_help(const CommandsParser& parser, const po::options_description& desc) {
+    std::cout << "usage: radosgw-admin <cmd> [options...]" << std::endl;
+    parser.print_help();
+    desc.print(std::cout);
+}
+
+void print_help_on_error(const CommandsParser& parser, po::options_description& option_desk) {
     std::cout << "invalid command" << std::endl;
-    option_desk.print(std::cout);
+    print_help(parser, option_desk);
 }
 
 int main(int argc, char** argv) {
@@ -205,24 +246,24 @@ int main(int argc, char** argv) {
     try {
         po::store(po::command_line_parser(argc, argv).options(options_desc).run(), vm);
     } catch (...) {
-        print_help_on_error(options_desc);
+        print_help_on_error(commands_parser, options_desc);
         return 0;
     }
     po::notify(vm);
 
     if (vm.count("help")) {
-        options_desc.print(std::cout);
+        print_help(commands_parser, options_desc);
         return 0;
     }
 
     auto cmd = commands_parser.recognize_command(argc, argv);
     if (cmd == nullptr) {
-        print_help_on_error(options_desc);
+        print_help_on_error(commands_parser, options_desc);
         return 0;
     }
 
     if (!cmd->process(vm)) {
-        print_help_on_error(options_desc);
+        print_help_on_error(commands_parser, options_desc);
         return 0;
     }
 
