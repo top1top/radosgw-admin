@@ -8,6 +8,7 @@ radosgw-admin user info --uid=<uid>
 When run these commands should output that they have been successfully run and output the arguments passed to them.
 
 ex:
+
 $ radosgw-admin user create --uid=200 --display-name=foo --email=foo@gmail.com
 user created with uid 200 display-name foo and email foo@gmail.com
 
