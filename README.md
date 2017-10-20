@@ -16,3 +16,5 @@ radosgw-admin --help - will display all the options copied for the real radosgw-
 command help info in Ceph.
 
 Any invalid command will give an error and display the help text
+
+for assembly we use cmake
