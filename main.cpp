@@ -22,7 +22,7 @@ static std::string merge_strings(const std::vector<std::string>& v) {
 
 class Command {
 public:
-    using CallbackType = std::function<bool(const po::variables_map&)>;
+    using CallbackType = std::function<void(const po::variables_map&)>;
 
     Command(ECommand id, const std::vector<std::string>& text,
             const std::string& help, const CallbackType& callback)
@@ -47,8 +47,8 @@ public:
         return id_;
     }
 
-    bool process(const po::variables_map& vm) const {
-        return callback_(vm);
+    void process(const po::variables_map& vm) const {
+        callback_(vm);
     }
 
 private:
@@ -79,8 +79,24 @@ static bool start_with(const char* str, const char* pref) {
     return *it_pref == 0;
 }
 
+class ProcessCmdError {
+public:
+    explicit ProcessCmdError(const std::string& message) : message_(message) {}
+
+    explicit ProcessCmdError(std::string&& message) : message_(std::move(message)) {}
+
+    explicit ProcessCmdError(const char* message) : message_(message) {}
+
+    std::string getMessage() const {
+        return message_;
+    }
+
+private:
+    std::string message_;
+};
+
 template <ECommand CmdId>
-bool process_command(const po::variables_map &vm);
+void process_command(const po::variables_map &vm);
 
 class CommandsParser {
 public:
@@ -164,44 +180,45 @@ private:
 };
 
 template<>
-bool process_command<ECommand::OPT_USER_CREATE>(const po::variables_map &vm) {
+void process_command<ECommand::OPT_USER_CREATE>(const po::variables_map &vm) {
     if (vm.size() > 4)
-        return false;
+        throw ProcessCmdError("too many options");
+
     auto uid = vm["uid"];
     if (uid.empty())
-        return false;
+        throw ProcessCmdError("uid option is require for this command");
+
     auto display_name = vm["display-name"];
     if (display_name.empty())
-        return false;
+        throw ProcessCmdError("display-name option is require for this command");
+
     auto email = vm["email"];
     if (email.empty())
-        return false;
+        throw ProcessCmdError("email option is require for this command");
+
     std::cout << "user created with uid " << uid.as<int>()
               << " display-name " << (display_name.as<std::string>())
               << " and email " << email.as<std::string>() << std::endl;
-    return true;
 }
 
 template<>
-bool process_command<ECommand::OPT_USER_DELETE>(const po::variables_map &vm) {
+void process_command<ECommand::OPT_USER_DELETE>(const po::variables_map &vm) {
     if (vm.size() > 2)
-        return false;
+        throw ProcessCmdError("too many options");
     auto uid = vm["uid"];
     if (uid.empty())
-        return false;
+        throw ProcessCmdError("uid option is require for this command");
     std::cout << "user with uid " << uid.as<int>() << ' ' << " was deleted" << std::endl;
-    return true;
 }
 
 template<>
-bool process_command<ECommand::OPT_USER_INFO>(const po::variables_map &vm) {
+void process_command<ECommand::OPT_USER_INFO>(const po::variables_map &vm) {
     if (vm.size() > 2)
-        return false;
+        throw ProcessCmdError("too many options");
     auto uid = vm["uid"];
     if (uid.empty())
-        return false;
+        throw ProcessCmdError("uid option is require for this command");
     std::cout << "info about user with uid " << uid.as<int>() << std::endl;
-    return true;
 }
 
 template <ECommand CommandId>
@@ -228,22 +245,12 @@ po::options_description register_options() {
     return desk;
 }
 
-po::positional_options_description register_pos_options(const std::string& name, po::options_description& desc) {
-    po::positional_options_description pos_desc;
-    desc.add_options()(name.c_str(), po::value<std::vector<std::string>>());
-    pos_desc.add(name.c_str(), -1);
-    return pos_desc;
-}
-
-void print_help(const CommandsParser& parser, const po::options_description& desc) {
+void print_help(const CommandsParser& parser, const po::options_description& desc, const char* error_message = nullptr) {
+    if (error_message)
+        std::cout << error_message << std::endl;
     std::cout << "usage: radosgw-admin <cmd> [options...]" << std::endl;
     parser.print_help();
     desc.print(std::cout);
-}
-
-void print_help_on_error(const CommandsParser& parser, po::options_description& option_desk) {
-    std::cout << "invalid command" << std::endl;
-    print_help(parser, option_desk);
 }
 
 int main(int argc, char** argv) {
@@ -260,7 +267,7 @@ int main(int argc, char** argv) {
     try {
         po::store(po::command_line_parser(argc, argv).options(options_desc_with_pos).positional(pos_options_desc).run(), vm);
     } catch (...) {
-        print_help_on_error(commands_parser, options_desc);
+        print_help(commands_parser, options_desc, "invalid command, error when parse command line arguments");
         return 0;
     }
     po::notify(vm);
@@ -275,19 +282,20 @@ int main(int argc, char** argv) {
     try {
         tokens = vm[command_tokens].as<std::vector<std::string>>();
     } catch (const boost::bad_any_cast&) {
-        print_help_on_error(commands_parser, options_desc);
+        print_help(commands_parser, options_desc, "invalid command, error when parse command line arguments");
         return 0;
     }
 
     auto cmd = commands_parser.recognize_command(tokens);
     if (cmd == nullptr) {
-        print_help_on_error(commands_parser, options_desc);
+        print_help(commands_parser, options_desc, ("no such command " + merge_strings(tokens)).c_str());
         return 0;
     }
 
-    if (!cmd->process(vm)) {
-        print_help_on_error(commands_parser, options_desc);
-        return 0;
+    try {
+        cmd->process(vm);
+    } catch (const ProcessCmdError& error) {
+        print_help(commands_parser, options_desc, error.getMessage().c_str());
     }
 
     return 0;
