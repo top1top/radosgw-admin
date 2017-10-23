@@ -97,29 +97,30 @@ public:
         commands_is_sorted = false;
     }
 
-    const Command *recognize_command(int argc, char **argv) {
+    const Command *recognize_command(const std::vector<std::string>& command_tokens) {
         sort_();
 
         size_t token_num = 0;
         auto it_begin = commands_.cbegin();
         auto it_end = commands_.cend();
 
-        for (auto it = argv + 1; it != argv + argc; ++it, ++token_num) {
-            it_begin = std::lower_bound(it_begin, it_end, *it, [token_num] (const std::unique_ptr<Command>& cmd, const char* key) {
-                return strcmp(cmd->get_text()[token_num].c_str(), key) < 0;
+        for (auto it = command_tokens.begin(); it != command_tokens.end(); ++it, ++token_num) {
+            it_begin = std::lower_bound(it_begin, it_end, *it, [token_num] (const std::unique_ptr<Command>& cmd, const std::string& key) {
+                return token_num < cmd->get_text().size() ? cmd->get_text()[token_num] < key : true;
             });
             if (it_begin == it_end)
                 return nullptr;
-            it_end = std::upper_bound(it_begin, it_end, *it, [token_num] (const char* key, const std::unique_ptr<Command>& cmd) {
-                return strcmp(key, cmd->get_text()[token_num].c_str()) < 0;
+            it_end = std::upper_bound(it_begin, it_end, *it, [token_num] (const std::string& key, const std::unique_ptr<Command>& cmd) {
+                return token_num < cmd->get_text().size() ? key < cmd->get_text()[token_num]: false;
             });
             if (it_begin == it_end)
                 return nullptr;
-            if (std::distance(it_begin, it_end) == 1) {
-                return it_begin->get();
-            }
+
         }
 
+        if (std::distance(it_begin, it_end) == 1) {
+            return it_begin->get();
+        }
         return nullptr;
     }
 
@@ -164,7 +165,7 @@ private:
 
 template<>
 bool process_command<ECommand::OPT_USER_CREATE>(const po::variables_map &vm) {
-    if (vm.size() > 3)
+    if (vm.size() > 4)
         return false;
     auto uid = vm["uid"];
     if (uid.empty())
@@ -175,31 +176,31 @@ bool process_command<ECommand::OPT_USER_CREATE>(const po::variables_map &vm) {
     auto email = vm["email"];
     if (email.empty())
         return false;
-    std::cout << "user created with uid " << boost::any_cast<int>(uid.value())
-              << " display-name " << boost::any_cast<std::string>(display_name.value())
-              << " and email " << boost::any_cast<std::string>(email.value()) << std::endl;
+    std::cout << "user created with uid " << uid.as<int>()
+              << " display-name " << (display_name.as<std::string>())
+              << " and email " << email.as<std::string>() << std::endl;
     return true;
 }
 
 template<>
 bool process_command<ECommand::OPT_USER_DELETE>(const po::variables_map &vm) {
-    if (vm.size() > 1)
+    if (vm.size() > 2)
         return false;
     auto uid = vm["uid"];
     if (uid.empty())
         return false;
-    std::cout << "user with uid " << boost::any_cast<int>(uid.value()) << ' ' << " was deleted" << std::endl;
+    std::cout << "user with uid " << uid.as<int>() << ' ' << " was deleted" << std::endl;
     return true;
 }
 
 template<>
 bool process_command<ECommand::OPT_USER_INFO>(const po::variables_map &vm) {
-    if (vm.size() > 1)
+    if (vm.size() > 2)
         return false;
     auto uid = vm["uid"];
     if (uid.empty())
         return false;
-    std::cout << "info about user with uid " << boost::any_cast<int>(uid.value()) << std::endl;
+    std::cout << "info about user with uid " << uid.as<int>() << std::endl;
     return true;
 }
 
@@ -227,6 +228,13 @@ po::options_description register_options() {
     return desk;
 }
 
+po::positional_options_description register_pos_options(const std::string& name, po::options_description& desc) {
+    po::positional_options_description pos_desc;
+    desc.add_options()(name.c_str(), po::value<std::vector<std::string>>());
+    pos_desc.add(name.c_str(), -1);
+    return pos_desc;
+}
+
 void print_help(const CommandsParser& parser, const po::options_description& desc) {
     std::cout << "usage: radosgw-admin <cmd> [options...]" << std::endl;
     parser.print_help();
@@ -242,9 +250,15 @@ int main(int argc, char** argv) {
     CommandsParser commands_parser = register_commands();
     po::options_description options_desc = register_options();
 
+    const std::string command_tokens = "command_tokens";
+    po::positional_options_description pos_options_desc;
+    pos_options_desc.add(command_tokens.c_str(), -1);
+    po::options_description options_desc_with_pos = options_desc;
+    options_desc_with_pos.add_options()(command_tokens.c_str(), po::value<std::vector<std::string>>());
+
     po::variables_map vm;
     try {
-        po::store(po::command_line_parser(argc, argv).options(options_desc).run(), vm);
+        po::store(po::command_line_parser(argc, argv).options(options_desc_with_pos).positional(pos_options_desc).run(), vm);
     } catch (...) {
         print_help_on_error(commands_parser, options_desc);
         return 0;
@@ -256,7 +270,16 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    auto cmd = commands_parser.recognize_command(argc, argv);
+    std::vector<std::string> tokens;
+
+    try {
+        tokens = vm[command_tokens].as<std::vector<std::string>>();
+    } catch (const boost::bad_any_cast&) {
+        print_help_on_error(commands_parser, options_desc);
+        return 0;
+    }
+
+    auto cmd = commands_parser.recognize_command(tokens);
     if (cmd == nullptr) {
         print_help_on_error(commands_parser, options_desc);
         return 0;
